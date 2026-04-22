@@ -161,14 +161,13 @@ def _top100_paper_entry_en(p: Dict, rank: int, translations: Dict) -> str:
     url = clean_arxiv_url(p.get("entry_url", ""))
     authors = format_authors_en(p.get("authors", []), max_display=3)
     score = p.get("quality_score", 0)
-    tier = p.get("quality_tier", "C")
     date = p.get("published", "")[:10]
     pid = p.get("id", "")
     summary = translations.get(pid, p.get("summary", "")).strip()
 
     lines = []
     lines.append(f"**#{rank}** [{title}]({url})")
-    lines.append(f"{authors} · `{tier}` · Score: {score:.2f} · {date}")
+    lines.append(f"*{authors}* · Score: {score:.2f} · {date}")
     lines.append(f"> {summary}")
     return "\n".join(lines)
 
@@ -179,13 +178,12 @@ def _top100_paper_entry_cn(p: Dict, rank: int) -> str:
     url = clean_arxiv_url(p.get("entry_url", ""))
     authors = format_authors_cn(p.get("authors", []), max_display=3)
     score = p.get("quality_score", 0)
-    tier = p.get("quality_tier", "C")
     date = p.get("published", "")[:10]
     summary = p.get("summary", "暂无总结").strip()
 
     lines = []
     lines.append(f"**#{rank}** [{title}]({url})")
-    lines.append(f"{authors} · `{tier}` · 评分: {score:.2f} · {date}")
+    lines.append(f"*{authors}* · 评分: {score:.2f} · {date}")
     lines.append(f"> {summary}")
     return "\n".join(lines)
 
@@ -196,9 +194,23 @@ def _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, top100,
     parts.append(
         "> A curated collection of research papers on AI Agent security — "
         f"covering attacks, defense, evaluation, and architecture. "
-        f"**{total} papers** from arXiv, ranked by quality score.\n"
+        f"**{total} papers** ({date_start} ~ {date_end}) from arXiv, ranked by quality score.\n"
     )
     parts.append(f"[中文版](README_CN.md)\n")
+
+    # TOC
+    parts.append("## Table of Contents\n")
+    parts.append("- [Statistics](#statistics)")
+    parts.append("- [Categories](#categories)")
+    parts.append("- [Scoring Methodology](#scoring-methodology)")
+    parts.append("- [Top 100 Papers](#top-100-papers)")
+    for dim in DIMENSION_ORDER:
+        cfg = DIMENSION_CONFIG[dim]
+        anchor = cfg['en'].lower().replace(' ', '-').replace('&', '')
+        dim_in_top100 = any(p.get("dimension") == dim for p in top100)
+        if dim_in_top100:
+            parts.append(f"  - [{cfg['emoji']} {cfg['en']}](#{anchor})")
+    parts.append("")
 
     # Stats
     parts.append("## Statistics\n")
@@ -206,7 +218,6 @@ def _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, top100,
     parts.append("|--------|-------|")
     parts.append(f"| Total Papers | {total} |")
     parts.append(f"| Date Range | {date_start} ~ {date_end} |")
-    parts.append(f"| Tier A Papers | {tier_counts['A']} |")
     parts.append(f"| Score Range | {min(scores):.2f} ~ {max(scores):.2f} (avg {sum(scores)/len(scores):.2f}) |")
     parts.append("")
 
@@ -233,34 +244,41 @@ def _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, top100,
     parts.append(f"| Author Quality | {WEIGHTS['author']*100:.0f}% | Highest author h-index |")
     parts.append(f"| Recency | {WEIGHTS['recency']*100:.0f}% | ≤3mo=10, ≤6mo=9, ≤12mo=7, >12mo=5 |")
     parts.append("")
-    parts.append("Quality tiers: **A** = top 10% | **B** = next 20% | C = remaining 70%\n")
 
     # Top 100 — grouped by category
+    # Compute date range for top 100
+    top100_dates = [p.get("published", "")[:10] for p in top100 if p.get("published")]
+    top100_date_range = ""
+    if top100_dates:
+        top100_date_range = f" ({min(top100_dates)} ~ {max(top100_dates)})"
+
     parts.append("## Top 100 Papers\n")
     parts.append(
-        f"The top {len(top100)} papers out of {total}, "
+        f"The top {len(top100)} papers out of {total}{top100_date_range}, "
         "organized by category and ranked by quality score.\n"
     )
 
     global_rank = 0
-    # First compute global ranks
     top100_with_rank = []
     for p in top100:
         global_rank += 1
         top100_with_rank.append((global_rank, p))
 
+    first_dim = True
     for dim in DIMENSION_ORDER:
         dim_papers = [(r, p) for r, p in top100_with_rank if p.get("dimension") == dim]
         if not dim_papers:
             continue
+        if not first_dim:
+            parts.append("---\n")
+        first_dim = False
         cfg = DIMENSION_CONFIG[dim]
         parts.append(f"### {cfg['emoji']} {cfg['en']}\n")
         for rank, p in dim_papers:
             parts.append(_top100_paper_entry_en(p, rank, translations))
             parts.append("")
-    parts.append("---\n")
 
-    # Footer
+    parts.append("---\n")
     parts.append("*Data sourced from [arXiv](https://arxiv.org/) and [Semantic Scholar](https://www.semanticscholar.org/).*\n")
 
     return "\n".join(parts)
@@ -271,9 +289,22 @@ def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100,
     parts.append("# Agent 安全论文精选\n")
     parts.append(
         f"> AI Agent 安全研究论文精选集——涵盖攻击对抗、防御对齐、安全测评与 Agent 安全架构。"
-        f"共 **{total} 篇** arXiv 论文，按质量评分排序。\n"
+        f"共 **{total} 篇** arXiv 论文（{date_start} ~ {date_end}），按质量评分排序。\n"
     )
     parts.append("[English Version](README.md)\n")
+
+    # TOC
+    parts.append("## 目录\n")
+    parts.append("- [统计](#统计)")
+    parts.append("- [分类](#分类)")
+    parts.append("- [评分方法](#评分方法)")
+    parts.append("- [Top 100 论文](#top-100-论文)")
+    for dim in DIMENSION_ORDER:
+        cfg = DIMENSION_CONFIG[dim]
+        dim_in_top100 = any(p.get("dimension") == dim for p in top100)
+        if dim_in_top100:
+            parts.append(f"  - [{cfg['emoji']} {dim}](#{cfg['en'].lower().replace(' ', '-').replace('&', '')})")
+    parts.append("")
 
     # Stats
     parts.append("## 统计\n")
@@ -281,7 +312,6 @@ def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100,
     parts.append("|------|-----|")
     parts.append(f"| 论文总数 | {total} |")
     parts.append(f"| 日期范围 | {date_start} ~ {date_end} |")
-    parts.append(f"| A 级论文 | {tier_counts['A']} |")
     parts.append(f"| 评分范围 | {min(scores):.2f} ~ {max(scores):.2f}（均值 {sum(scores)/len(scores):.2f}） |")
     parts.append("")
 
@@ -309,12 +339,16 @@ def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100,
     parts.append(f"| 作者质量 | {WEIGHTS['author']*100:.0f}% | 最高作者 h-index |")
     parts.append(f"| 时效性 | {WEIGHTS['recency']*100:.0f}% | ≤3月=10，≤6月=9，≤12月=7，>12月=5 |")
     parts.append("")
-    parts.append("质量等级：**A** = 前 10% | **B** = 前 30% | C = 其余\n")
 
     # Top 100 — grouped by category
+    top100_dates = [p.get("published", "")[:10] for p in top100 if p.get("published")]
+    top100_date_range = ""
+    if top100_dates:
+        top100_date_range = f"（{min(top100_dates)} ~ {max(top100_dates)}）"
+
     parts.append("## Top 100 论文\n")
     parts.append(
-        f"从 {total} 篇论文中选出评分最高的 {len(top100)} 篇，"
+        f"从 {total} 篇论文中选出评分最高的 {len(top100)} 篇{top100_date_range}，"
         "按类别分组展示。\n"
     )
 
@@ -324,18 +358,21 @@ def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100,
         global_rank += 1
         top100_with_rank.append((global_rank, p))
 
+    first_dim = True
     for dim in DIMENSION_ORDER:
         dim_papers = [(r, p) for r, p in top100_with_rank if p.get("dimension") == dim]
         if not dim_papers:
             continue
+        if not first_dim:
+            parts.append("---\n")
+        first_dim = False
         cfg = DIMENSION_CONFIG[dim]
-        parts.append(f"### {cfg['emoji']} {cfg['en']}（{dim}）\n")
+        parts.append(f"### {cfg['emoji']} {dim}\n")
         for rank, p in dim_papers:
             parts.append(_top100_paper_entry_cn(p, rank))
             parts.append("")
-    parts.append("---\n")
 
-    # Footer
+    parts.append("---\n")
     parts.append("*数据来源：[arXiv](https://arxiv.org/)、[Semantic Scholar](https://www.semanticscholar.org/)*\n")
 
     return "\n".join(parts)
