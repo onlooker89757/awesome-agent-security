@@ -18,6 +18,7 @@ from typing import Dict, List
 # ── Configuration ──────────────────────────────────────
 
 LIBRARY_PATH = "data/library/library.json"
+TRANSLATIONS_PATH = "data/library/translations.json"
 OUTPUT_DIR = Path(".")
 DOCS_DIR = Path("docs")
 TOP_N = 100
@@ -58,10 +59,10 @@ DIMENSION_CONFIG = {
 }
 
 WEIGHTS = {
-    "citation": 0.45,
-    "influential": 0.20,
+    "citation": 0.50,
+    "influential": 0.10,
     "venue": 0.10,
-    "author": 0.15,
+    "author": 0.20,
     "recency": 0.10,
 }
 
@@ -116,13 +117,21 @@ def tier_badge(tier: str) -> str:
 
 # ── README Generation ──────────────────────────────────
 
-def generate_readme(data: Dict, lang: str = "en") -> str:
+def load_translations() -> Dict[str, str]:
+    """Load English translations of Chinese summaries."""
+    trans_path = Path(TRANSLATIONS_PATH)
+    if trans_path.exists():
+        with open(trans_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def generate_readme(data: Dict, translations: Dict, lang: str = "en") -> str:
     """Generate README content."""
     meta = data["metadata"]
     papers = data["papers"]
     total = len(papers)
 
-    # Stats
     scores = [p.get("quality_score", 0) for p in papers if "quality_score" in p]
     tier_counts = {"A": 0, "B": 0, "C": 0}
     for p in papers:
@@ -130,16 +139,58 @@ def generate_readme(data: Dict, lang: str = "en") -> str:
 
     date_start = meta.get("date_range", {}).get("start", "")
     date_end = meta.get("date_range", {}).get("end", "")
-
     by_dim = meta.get("by_dimension_counts", {})
 
+    top100 = sorted(papers, key=lambda x: x.get("quality_score", 0), reverse=True)[:TOP_N]
+
+    # Group top100 by dimension
+    top100_by_dim = {}
+    for p in top100:
+        dim = p.get("dimension", "其他")
+        top100_by_dim.setdefault(dim, []).append(p)
+
     if lang == "cn":
-        return _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, papers)
+        return _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100, top100_by_dim)
     else:
-        return _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, papers)
+        return _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, top100, top100_by_dim, translations)
 
 
-def _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, papers):
+def _top100_paper_entry_en(p: Dict, rank: int, translations: Dict) -> str:
+    """Format a single paper entry for English README."""
+    title = p["title"]
+    url = clean_arxiv_url(p.get("entry_url", ""))
+    authors = format_authors_en(p.get("authors", []), max_display=3)
+    score = p.get("quality_score", 0)
+    tier = p.get("quality_tier", "C")
+    date = p.get("published", "")[:10]
+    pid = p.get("id", "")
+    summary = translations.get(pid, p.get("summary", "")).strip()
+
+    lines = []
+    lines.append(f"**#{rank}** [{title}]({url})")
+    lines.append(f"{authors} · `{tier}` · Score: {score:.2f} · {date}")
+    lines.append(f"> {summary}")
+    return "\n".join(lines)
+
+
+def _top100_paper_entry_cn(p: Dict, rank: int) -> str:
+    """Format a single paper entry for Chinese README."""
+    title = p["title"]
+    url = clean_arxiv_url(p.get("entry_url", ""))
+    authors = format_authors_cn(p.get("authors", []), max_display=3)
+    score = p.get("quality_score", 0)
+    tier = p.get("quality_tier", "C")
+    date = p.get("published", "")[:10]
+    summary = p.get("summary", "暂无总结").strip()
+
+    lines = []
+    lines.append(f"**#{rank}** [{title}]({url})")
+    lines.append(f"{authors} · `{tier}` · 评分: {score:.2f} · {date}")
+    lines.append(f"> {summary}")
+    return "\n".join(lines)
+
+
+def _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, top100, top100_by_dim, translations):
     parts = []
     parts.append("# Awesome Agent Security Papers\n")
     parts.append(
@@ -184,32 +235,38 @@ def _readme_en(total, scores, tier_counts, date_start, date_end, by_dim, papers)
     parts.append("")
     parts.append("Quality tiers: **A** = top 10% | **B** = next 20% | C = remaining 70%\n")
 
-    # Top 100
+    # Top 100 — grouped by category
     parts.append("## Top 100 Papers\n")
-    top100 = sorted(papers, key=lambda x: x.get("quality_score", 0), reverse=True)[:TOP_N]
-    parts.append("| Rank | Title | Authors | Score | Tier | Date | Category |")
-    parts.append("|-----:|-------|---------|------:|------|------|----------|")
-    for rank, p in enumerate(top100, 1):
-        title = p["title"]
-        url = clean_arxiv_url(p.get("entry_url", ""))
-        authors = format_authors_en(p.get("authors", []))
-        score = p.get("quality_score", 0)
-        tier = tier_badge(p.get("quality_tier", "C"))
-        date = p.get("published", "")[:10]
-        dim = p.get("dimension", "")
-        short = DIMENSION_CONFIG.get(dim, {}).get("short", dim)
-        parts.append(f"| {rank} | [{title}]({url}) | {authors} | {score:.2f} | {tier} | {date} | {short} |")
-    parts.append("")
+    parts.append(
+        f"The top {len(top100)} papers out of {total}, "
+        "organized by category and ranked by quality score.\n"
+    )
+
+    global_rank = 0
+    # First compute global ranks
+    top100_with_rank = []
+    for p in top100:
+        global_rank += 1
+        top100_with_rank.append((global_rank, p))
+
+    for dim in DIMENSION_ORDER:
+        dim_papers = [(r, p) for r, p in top100_with_rank if p.get("dimension") == dim]
+        if not dim_papers:
+            continue
+        cfg = DIMENSION_CONFIG[dim]
+        parts.append(f"### {cfg['emoji']} {cfg['en']}\n")
+        for rank, p in dim_papers:
+            parts.append(_top100_paper_entry_en(p, rank, translations))
+            parts.append("")
+    parts.append("---\n")
 
     # Footer
-    parts.append("---\n")
     parts.append("*Data sourced from [arXiv](https://arxiv.org/) and [Semantic Scholar](https://www.semanticscholar.org/).*\n")
-    parts.append(f"*Last updated: {papers[0].get('_updated_date', '') if papers else ''}*\n")
 
     return "\n".join(parts)
 
 
-def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, papers):
+def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100, top100_by_dim):
     parts = []
     parts.append("# Agent 安全论文精选\n")
     parts.append(
@@ -254,25 +311,31 @@ def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, papers)
     parts.append("")
     parts.append("质量等级：**A** = 前 10% | **B** = 前 30% | C = 其余\n")
 
-    # Top 100
+    # Top 100 — grouped by category
     parts.append("## Top 100 论文\n")
-    top100 = sorted(papers, key=lambda x: x.get("quality_score", 0), reverse=True)[:TOP_N]
-    parts.append("| 排名 | 标题 | 作者 | 评分 | 等级 | 日期 | 分类 |")
-    parts.append("|-----:|------|------|-----:|------|------|------|")
-    for rank, p in enumerate(top100, 1):
-        title = p["title"]
-        url = clean_arxiv_url(p.get("entry_url", ""))
-        authors = format_authors_cn(p.get("authors", []))
-        score = p.get("quality_score", 0)
-        tier = tier_badge(p.get("quality_tier", "C"))
-        date = p.get("published", "")[:10]
-        dim = p.get("dimension", "")
-        short = DIMENSION_CONFIG.get(dim, {}).get("short", dim)
-        parts.append(f"| {rank} | [{title}]({url}) | {authors} | {score:.2f} | {tier} | {date} | {short} |")
-    parts.append("")
+    parts.append(
+        f"从 {total} 篇论文中选出评分最高的 {len(top100)} 篇，"
+        "按类别分组展示。\n"
+    )
+
+    global_rank = 0
+    top100_with_rank = []
+    for p in top100:
+        global_rank += 1
+        top100_with_rank.append((global_rank, p))
+
+    for dim in DIMENSION_ORDER:
+        dim_papers = [(r, p) for r, p in top100_with_rank if p.get("dimension") == dim]
+        if not dim_papers:
+            continue
+        cfg = DIMENSION_CONFIG[dim]
+        parts.append(f"### {cfg['emoji']} {cfg['en']}（{dim}）\n")
+        for rank, p in dim_papers:
+            parts.append(_top100_paper_entry_cn(p, rank))
+            parts.append("")
+    parts.append("---\n")
 
     # Footer
-    parts.append("---\n")
     parts.append("*数据来源：[arXiv](https://arxiv.org/)、[Semantic Scholar](https://www.semanticscholar.org/)*\n")
 
     return "\n".join(parts)
@@ -337,15 +400,22 @@ def main():
     papers = data["papers"]
     print(f"Loaded {len(papers)} papers from {LIBRARY_PATH}")
 
+    # Load translations
+    translations = load_translations()
+    if translations:
+        print(f"Loaded {len(translations)} translations from {TRANSLATIONS_PATH}")
+    else:
+        print(f"Warning: No translations found at {TRANSLATIONS_PATH}")
+
     # Ensure docs directory exists
     DOCS_DIR.mkdir(exist_ok=True)
 
     # Generate READMEs
-    readme_en = generate_readme(data, lang="en")
+    readme_en = generate_readme(data, translations, lang="en")
     (OUTPUT_DIR / "README.md").write_text(readme_en, encoding="utf-8")
     print("Generated README.md")
 
-    readme_cn = generate_readme(data, lang="cn")
+    readme_cn = generate_readme(data, translations, lang="cn")
     (OUTPUT_DIR / "README_CN.md").write_text(readme_cn, encoding="utf-8")
     print("Generated README_CN.md")
 
