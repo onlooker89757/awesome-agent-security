@@ -393,7 +393,7 @@ def _readme_cn(total, scores, tier_counts, date_start, date_end, by_dim, top100,
             parts.append("---\n")
         first_dim = False
         cfg = DIMENSION_CONFIG[dim]
-        parts.append(f"### {cfg['heading']}（{dim}）\n")
+        parts.append(f"### {cfg['heading']}\n")
         for rank, p in dim_papers:
             parts.append(_top100_paper_entry_cn(p, rank))
             parts.append("")
